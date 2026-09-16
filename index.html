@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subdomain Finder</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    background: #111;
+    color: #0f0;
+    font-family: monospace;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+  }
+  .wrap {
+    width: 100%;
+    max-width: 900px;
+  }
+  h2 {
+    text-align: center;
+  }
+  .search-row {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  input {
+    background: #000;
+    color: #0f0;
+    border: 1px solid #0f0;
+    padding: 8px;
+    font-family: monospace;
+    flex: 1;
+    min-width: 200px;
+  }
+  button {
+    background: #000;
+    color: #0f0;
+    border: 1px solid #0f0;
+    padding: 8px 16px;
+    font-family: monospace;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #0f0;
+    color: #000;
+  }
+  button.active {
+    background: #0f0;
+    color: #000;
+  }
+  #status {
+    text-align: center;
+    margin-top: 10px;
+    min-height: 18px;
+  }
+  #status.loading {
+    animation: statusFlicker 1.4s infinite;
+  }
+  @keyframes statusFlicker {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .cursor-blink {
+    display: inline-block;
+    width: 8px;
+    background: #0f0;
+    margin-left: 2px;
+    animation: blink 0.8s steps(1) infinite;
+  }
+  @keyframes blink {
+    0%, 50% { opacity: 1; }
+    50.01%, 100% { opacity: 0; }
+  }
+  .view-toggle {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .section-title {
+    margin-top: 20px;
+    border-bottom: 1px solid #0f0;
+    padding-bottom: 4px;
+    text-align: center;
+  }
+  ul {
+    list-style: none;
+    padding: 0;
+    margin-top: 8px;
+  }
+  li {
+    padding: 4px 0;
+    border-bottom: 1px solid #333;
+    text-align: center;
+    word-break: break-all;
+  }
+  a {
+    color: #0f0;
+    text-decoration: none;
+  }
+  a:hover {
+    text-decoration: underline;
+  }
+  .dead a {
+    color: #666;
+  }
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+  }
+  .dot-pending { background: #666; }
+  .dot-alive { background: #0f0; }
+  .dot-dead { background: #f00; }
+  /* Graph view */
+  #graphWrap {
+    display: none;
+    margin-top: 16px;
+    border: 1px solid #0f0;
+    background:
+      linear-gradient(rgba(0,255,0,0.12) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,0,0.12) 1px, transparent 1px),
+      #060a06;
+    background-size: 28px 28px, 28px 28px, auto;
+    position: relative;
+    overflow: hidden;
+    touch-action: none;
+  }
+  #graphSvg {
+    width: 100%;
+    height: 600px;
+    display: block;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #graphSvg.panning { cursor: grabbing; }
+  .legend-box {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(0,0,0,0.85);
+    border: 1px solid #0f0;
+    padding: 8px 10px;
+    font-size: 10px;
+    line-height: 1.6;
+    color: #ccc;
+    max-width: 150px;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .legend-title {
+    color: #0f0;
+    font-weight: bold;
+    margin-bottom: 4px;
+    text-align: center;
+  }
+  .legend-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  #tooltip {
+    position: absolute;
+    display: none;
+    background: #000;
+    border: 1px solid #0f0;
+    color: #0f0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    pointer-events: none;
+    white-space: normal;
+    z-index: 20;
+    max-width: 260px;
+    word-break: break-all;
+  }
+  #graphHint {
+    text-align: center;
+    font-size: 11px;
+    color: #666;
+    margin-top: 6px;
+  }
+  .zoom-controls {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 5;
+  }
+  .zoom-controls button {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    line-height: 1;
+    font-size: 16px;
+  }
+  @media (max-width: 480px) {
+    button { width: 100%; }
+    input { width: 100%; }
+    .view-toggle { flex-direction: column; }
+    .legend-box { max-width: 130px; font-size: 9px; }
+    .zoom-controls { flex-direction: row; bottom: 8px; right: 50%; transform: translateX(50%); }
+    .zoom-controls button { width: 42px; height: 42px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>Subdomain Finder</h2>
+  <div class="search-row">
+    <input type="text" id="domain" placeholder="example.com" onkeydown="if(event.key==='Enter') search()">
+    <button onclick="search()">Search</button>
+  </div>
+  <p id="status"></p>
+  <div class="view-toggle" id="viewToggle" style="display:none">
+    <button id="btnList" class="active" onclick="setView('list')">List</button>
+    <button id="btnGraph" onclick="setView('graph')">Graph</button>
+  </div>
+  <div id="results"></div>
+  <div id="graphWrap">
+    <svg id="graphSvg"></svg>
+    <div class="legend-box">
+      <div class="legend-title">LEGEND</div>
+      <div class="legend-row"><span class="legend-dot" style="background:#eee"></span> Root domain</div>
+      <div class="legend-row"><span class="legend-dot" style="background:#4da6ff"></span> API</div>
+      <div class="legend-row"><span class="legend-dot" style="background:#0f0"></span> User</div>
+      <div class="legend-row"><span class="legend-dot" style="background:#444"></span> Dead</div>
+      <div style="margin-top:6px; border-top:1px solid #333; padding-top:4px;">
+        Distance from center = certificate age (older = closer)
+      </div>
+      <div style="margin-top:4px;">Size = days since first seen</div>
+    </div>
+    <div class="zoom-controls">
+      <button onclick="zoomBy(1.25)">+</button>
+      <button onclick="zoomBy(0.8)">−</button>
+      <button onclick="resetView()">⟲</button>
+    </div>
+    <div id="tooltip"></div>
+  </div>
+  <div id="graphHint" style="display:none">Drag nodes • Pinch/scroll to zoom • Drag background to pan • Hover/tap for details</div>
+</div>
+<script>
+let currentView = 'list';
+let graphData = null;
+
+const loadingLines = [
+  "> connecting to Certificate Transparency...",
+  "> querying Cert Spotter API...",
+  "> parsing SSL/TLS records...",
+  "> enumerating DNS names...",
+  "> deduplicating wildcard entries...",
+  "> cross-referencing issuer chains...",
+  "> resolving subdomain tree...",
+  "> mapping attack surface...",
+  "> almost there..."
+];
+let loadingInterval = null;
+let loadingTimeout = null;
+
+function startLoading() {
+  const status = document.getElementById('status');
+  status.classList.add('loading');
+  let i = 0;
+  status.innerHTML = loadingLines[0] + '<span class="cursor-blink">&nbsp;</span>';
+  loadingInterval = setInterval(() => {
+    i = (i + 1) % loadingLines.length;
+    typeLine(loadingLines[i]);
+  }, 1400);
+}
+function typeLine(line) {
+  const status = document.getElementById('status');
+  clearTimeout(loadingTimeout);
+  let chars = 0;
+  status.innerHTML = '<span class="cursor-blink">&nbsp;</span>';
+  function step() {
+    chars++;
+    status.innerHTML = escXml(line.slice(0, chars)) + '<span class="cursor-blink">&nbsp;</span>';
+    if (chars < line.length) {
+      loadingTimeout = setTimeout(step, 18);
+    }
+  }
+  step();
+}
+function stopLoading(finalText) {
+  clearInterval(loadingInterval);
+  clearTimeout(loadingTimeout);
+  loadingInterval = null;
+  const status = document.getElementById('status');
+  status.classList.remove('loading');
+  status.textContent = finalText;
+}
+
+function setView(v) {
+  currentView = v;
+  document.getElementById('btnList').classList.toggle('active', v === 'list');
+  document.getElementById('btnGraph').classList.toggle('active', v === 'graph');
+  document.getElementById('results').style.display = v === 'list' ? '' : 'none';
+  document.getElementById('graphWrap').style.display = v === 'graph' ? 'block' : 'none';
+  document.getElementById('graphHint').style.display = v === 'graph' ? 'block' : 'none';
+  if (v === 'graph' && graphData) renderGraph(graphData);
+}
+
+async function checkAlive(sub) {
+  const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
+  const li = document.getElementById(id);
+  if (!li) return;
+  const dot = li.querySelector('.status-dot');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    await fetch(`https://${sub}`, { mode: 'no-cors', signal: controller.signal });
+    clearTimeout(timeout);
+    dot.classList.remove('dot-pending');
+    dot.classList.add('dot-alive');
+    updateNodeStatus(sub, 'alive');
+  } catch (err) {
+    clearTimeout(timeout);
+    moveToDead(li);
+    updateNodeStatus(sub, 'dead');
+  }
+}
+
+function updateNodeStatus(sub, status) {
+  if (!graphData) return;
+  const node = graphData.nodes.find(n => n.id === sub);
+  if (node) {
+    node.status = status;
+    if (currentView === 'graph') draw(graphData);
+  }
+}
+
+function moveToDead(li) {
+  const dot = li.querySelector('.status-dot');
+  dot.classList.remove('dot-pending');
+  dot.classList.add('dot-dead');
+  li.classList.add('dead');
+  const parentUl = li.parentElement;
+  const prevSection = parentUl ? parentUl.previousElementSibling : null;
+  const deadList = document.getElementById('dead-list');
+  const deadSection = document.getElementById('dead-section');
+  const deadCount = document.getElementById('dead-count');
+  li.remove();
+  deadList.appendChild(li);
+  if (prevSection && prevSection.classList.contains('section-title') && prevSection.id !== 'dead-section') {
+    const match = prevSection.textContent.match(/\((\d+)\)/);
+    const label = prevSection.textContent.split('(')[0].trim();
+    if (match) {
+      const newCount = parseInt(match[1], 10) - 1;
+      prevSection.textContent = `${label} (${newCount})`;
+      if (parentUl.children.length === 0) {
+        prevSection.style.display = 'none';
+        parentUl.style.display = 'none';
+      }
+    }
+  }
+  deadSection.style.display = '';
+  deadCount.textContent = deadList.children.length;
+}
+
+// ---------- Asosiy qidiruv (Cert Spotter + crt.sh fallback) ----------
+async function search() {
+  let domain = document.getElementById('domain').value.trim().toLowerCase();
+  domain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
+  const status = document.getElementById('status');
+  const results = document.getElementById('results');
+  const viewToggle = document.getElementById('viewToggle');
+
+  if (!domain || !domain.includes('.')) {
+    status.textContent = "Enter a valid domain";
+    return;
+  }
+
+  results.innerHTML = "";
+  viewToggle.style.display = 'none';
+  document.getElementById('graphWrap').style.display = 'none';
+  document.getElementById('graphHint').style.display = 'none';
+  setView('list');
+  startLoading();
+
+  try {
+    let subInfo = new Map(); // subdomain -> earliest issued timestamp
+    let sourceUsed = '';
+
+    // 1. Birinchi navbatda Cert Spotter (CORS bor, proxy kerak emas)
+    try {
+      const csUrl = `https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(domain)}&include_subdomains=true&expand=dns_names`;
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 18000);
+      const res = await fetch(csUrl, { signal: controller.signal });
+      clearTimeout(t);
+      if (!res.ok) throw new Error(`CertSpotter HTTP ${res.status}`);
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error('Invalid response');
+
+      for (const entry of data) {
+        if (!entry.dns_names) continue;
+        const issued = entry.not_before ? Date.parse(entry.not_before) : null;
+        for (let name of entry.dns_names) {
+          name = name.trim().toLowerCase().replace(/^\*\./, '');
+          if (name === domain || name.endsWith('.' + domain)) {
+            const t = issued || Date.now();
+            if (!subInfo.has(name) || t < subInfo.get(name)) {
+              subInfo.set(name, t);
+            }
+          }
+        }
+      }
+      sourceUsed = 'Cert Spotter';
+    } catch (e) {
+      console.warn('Cert Spotter failed, trying crt.sh...', e.message);
+    }
+
+    // 2. Agar Cert Spotter hech narsa bermasa yoki xato bersa → crt.sh + proxy
+    if (subInfo.size === 0) {
+      const targetUrl = `https://crt.sh/?q=%25.${domain}&output=json`;
+      const proxies = [
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+        `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+        `https://api.cors.lol/?url=${encodeURIComponent(targetUrl)}`
+      ];
+
+      let data = null;
+      let lastErr = null;
+      for (const proxyUrl of proxies) {
+        try {
+          const controller = new AbortController();
+          const t = setTimeout(() => controller.abort(), 25000); // 25 soniya
+          const res = await fetch(proxyUrl, { signal: controller.signal });
+          clearTimeout(t);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          data = JSON.parse(text);
+          break;
+        } catch (e) {
+          lastErr = e;
+          continue;
+        }
+      }
+      if (data === null) {
+        throw new Error(`Barcha manbalar ishlamadi (oxirgi xato: ${lastErr && lastErr.message})`);
+      }
+
+      for (const entry of data) {
+        if (!entry.name_value) continue;
+        const issued = entry.entry_timestamp || entry.not_before || null;
+        for (let name of entry.name_value.split('\n')) {
+          name = name.trim().toLowerCase().replace(/^\*\./, '');
+          if (name === domain || name.endsWith('.' + domain)) {
+            const t = issued ? Date.parse(issued) : Date.now();
+            if (!subInfo.has(name) || t < subInfo.get(name)) {
+              subInfo.set(name, t);
+            }
+          }
+        }
+      }
+      sourceUsed = 'crt.sh';
+    }
+
+    const sorted = Array.from(subInfo.keys()).sort();
+    if (sorted.length === 0) {
+      stopLoading("> scan complete — 0 targets found");
+      return;
+    }
+
+    stopLoading(`> scan complete — ${sorted.length} subdomains found (${sourceUsed})`);
+
+    const apiPattern = /(^api[.-]|[.-]api[.-]|[.-]api$|graphql|gateway|oauth|webhook|rpc|grpc|autodiscover)/;
+    const apiList = [];
+    const userList = [];
+    sorted.forEach(s => {
+      if (apiPattern.test(s)) apiList.push(s);
+      else userList.push(s);
+    });
+
+    function renderSection(title, list, sectionId) {
+      if (list.length === 0) return "";
+      let html = `<div class="section-title" id="${sectionId}">${title} (${list.length})</div><ul>`;
+      list.forEach(s => {
+        const id = 'sub-' + s.replace(/[^a-z0-9]/g, '');
+        html += `<li id="${id}" data-sub="${s}"><span class="status-dot dot-pending"></span><a href="https://${s}" target="_blank">${s}</a></li>`;
+      });
+      html += "</ul>";
+      return html;
+    }
+
+    results.innerHTML =
+      renderSection("For User", userList, "user-section") +
+      renderSection("For API", apiList, "api-section") +
+      `<div class="section-title" id="dead-section" style="display:none">Dead (<span id="dead-count">0</span>)</div><ul id="dead-list"></ul>`;
+
+    // Graph data
+    const now = Date.now();
+    const ages = sorted.map(s => now - subInfo.get(s));
+    const minAge = Math.min(...ages);
+    const maxAge = Math.max(...ages);
+    const nodes = [{ id: domain, root: true, type: 'root', status: 'alive', age: 0 }];
+    const links = [];
+    sorted.forEach(s => {
+      const age = now - subInfo.get(s);
+      const type = apiPattern.test(s) ? 'api' : 'user';
+      nodes.push({ id: s, root: false, type, status: 'pending', age, issued: subInfo.get(s) });
+      links.push({ source: domain, target: s });
+    });
+    graphData = { nodes, links, minAge, maxAge };
+    viewToggle.style.display = 'flex';
+
+    sorted.forEach(s => checkAlive(s));
+  } catch (err) {
+    stopLoading(`> connection failed — ${err.message || 'target unreachable'}`);
+  }
+}
+
+// ================= Force-directed graph (o‘zgartirilmagan) =================
+let simState = null;
+let camera = { x: 0, y: 0, scale: 1 };
+const activePointers = new Map();
+let interactionMode = null;
+let dragNode = null;
+let panStart = null;
+let pinchStart = null;
+let didDrag = false;
+
+function screenToWorld(svg, clientX, clientY) {
+  const rect = svg.getBoundingClientRect();
+  const vb = svg.viewBox.baseVal;
+  const sx = (clientX - rect.left) / rect.width * vb.width + vb.x;
+  const sy = (clientY - rect.top) / rect.height * vb.height + vb.y;
+  return { x: (sx - camera.x) / camera.scale, y: (sy - camera.y) / camera.scale };
+}
+function zoomBy(factor) {
+  const svg = document.getElementById('graphSvg');
+  const rect = svg.getBoundingClientRect();
+  zoomAtScreenPoint(factor, rect.width / 2, rect.height / 2);
+}
+function zoomAtScreenPoint(factor, sx, sy) {
+  const newScale = Math.max(0.25, Math.min(4, camera.scale * factor));
+  const appliedFactor = newScale / camera.scale;
+  camera.x = sx - (sx - camera.x) * appliedFactor;
+  camera.y = sy - (sy - camera.y) * appliedFactor;
+  camera.scale = newScale;
+  if (graphData) draw(graphData);
+}
+function resetView() {
+  camera = { x: 0, y: 0, scale: 1 };
+  if (graphData) draw(graphData);
+}
+function renderGraph(data, preserveLayout) {
+  const svg = document.getElementById('graphSvg');
+  const rect = svg.getBoundingClientRect();
+  const W = rect.width || 800;
+  const H = 600;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.dataset.w = W;
+  svg.dataset.h = H;
+  if (!preserveLayout || !simState) {
+    const cx = W / 2, cy = H / 2;
+    const maxR = Math.min(W, H) / 2 - 40;
+    data.nodes.forEach((n, i) => {
+      if (n.root) {
+        n.x = cx; n.y = cy; n.fx = cx; n.fy = cy;
+      } else {
+        const ageFrac = data.maxAge > data.minAge
+          ? (n.age - data.minAge) / (data.maxAge - data.minAge)
+          : 0.5;
+        const r = 60 + ageFrac * maxR;
+        const angle = (i / data.nodes.length) * Math.PI * 2 * 3 + Math.random() * 0.5;
+        n.x = cx + r * Math.cos(angle);
+        n.y = cy + r * Math.sin(angle);
+        n.targetR = r;
+      }
+      n.vx = 0; n.vy = 0;
+    });
+    simState = { ticks: 0 };
+    camera = { x: 0, y: 0, scale: 1 };
+    runSimulation(data, cx, cy, maxR);
+    setupGraphInteraction(svg);
+  }
+  draw(data);
+}
+function runSimulation(data, cx, cy, maxR) {
+  const nodeById = new Map(data.nodes.map(n => [n.id, n]));
+  for (let iter = 0; iter < 120; iter++) {
+    for (let i = 0; i < data.nodes.length; i++) {
+      for (let j = i + 1; j < data.nodes.length; j++) {
+        const a = data.nodes[i], b = data.nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        let dist2 = dx * dx + dy * dy;
+        if (dist2 < 1) dist2 = 1;
+        const force = 800 / dist2;
+        const dist = Math.sqrt(dist2);
+        const fx = (dx / dist) * force, fy = (dy / dist) * force;
+        if (!a.root) { a.vx += fx; a.vy += fy; }
+        if (!b.root) { b.vx -= fx; b.vy -= fy; }
+      }
+    }
+    data.links.forEach(l => {
+      const t = nodeById.get(l.target);
+      if (!t || t.root) return;
+      const dx = t.x - cx, dy = t.y - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const desired = t.targetR || 100;
+      const diff = (dist - desired) * 0.06;
+      t.vx -= (dx / dist) * diff;
+      t.vy -= (dy / dist) * diff;
+    });
+    data.nodes.forEach(n => {
+      if (n.root) return;
+      n.vx *= 0.85; n.vy *= 0.85;
+      n.x += n.vx * 0.15;
+      n.y += n.vy * 0.15;
+    });
+  }
+}
+function typeColor(n) {
+  if (n.root) return '#eee';
+  if (n.status === 'dead') return '#444';
+  if (n.type === 'api') return '#4da6ff';
+  return '#0f0';
+}
+function nodeRadius(n) {
+  return n.root ? 14 : 5 + Math.min(10, (n.age || 0) / (1000 * 60 * 60 * 24 * 30));
+}
+function draw(data) {
+  const svg = document.getElementById('graphSvg');
+  const W = parseFloat(svg.dataset.w) || 800;
+  const H = parseFloat(svg.dataset.h) || 600;
+  let html = `<g transform="translate(${camera.x},${camera.y}) scale(${camera.scale})">`;
+  data.links.forEach(l => {
+    const s = data.nodes.find(n => n.id === l.source);
+    const t = data.nodes.find(n => n.id === l.target);
+    if (!s || !t) return;
+    html += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#0f0" stroke-opacity="0.25" stroke-width="1" />`;
+  });
+  data.nodes.forEach(n => {
+    const r = nodeRadius(n);
+    const color = typeColor(n);
+    const hitR = Math.max(r, 16);
+    html += `<circle cx="${n.x}" cy="${n.y}" r="${hitR}" fill="transparent" class="gnode-hit" data-id="${escAttr(n.id)}" style="cursor:pointer"/>`;
+    html += `<circle cx="${n.x}" cy="${n.y}" r="${r}" fill="${color}" stroke="#000" stroke-width="1" class="gnode" data-id="${escAttr(n.id)}" style="pointer-events:none"/>`;
+    const labelY = n.y - r - 5;
+    const fontSize = n.root ? 12 : 9;
+    const labelColor = n.root ? '#fff' : (n.status === 'dead' ? '#555' : '#0f0');
+    html += `<text x="${n.x}" y="${labelY}" fill="${labelColor}" font-size="${fontSize}" text-anchor="middle" font-family="monospace" style="pointer-events:none">${escXml(n.id)}</text>`;
+  });
+  html += `</g>`;
+  svg.innerHTML = html;
+}
+function findNodeAt(svg, data, clientX, clientY) {
+  const world = screenToWorld(svg, clientX, clientY);
+  let closest = null, closestD = Infinity;
+  data.nodes.forEach(n => {
+    const r = Math.max(nodeRadius(n), 16 / camera.scale);
+    const dx = n.x - world.x, dy = n.y - world.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d <= r && d < closestD) { closest = n; closestD = d; }
+  });
+  return closest;
+}
+function showTooltip(clientX, clientY, n) {
+  const wrap = document.getElementById('graphWrap');
+  const wrapRect = wrap.getBoundingClientRect();
+  const tooltip = document.getElementById('tooltip');
+  const issuedStr = n.issued ? new Date(n.issued).toISOString().slice(0, 10) : '—';
+  const ageDays = n.age ? Math.round(n.age / (1000 * 60 * 60 * 24)) : 0;
+  tooltip.innerHTML = `
+    <b>${escXml(n.id)}</b><br>
+    type: ${n.root ? 'root' : n.type}<br>
+    status: ${n.status || '—'}<br>
+    cert first seen: ${issuedStr}<br>
+    age: ${ageDays}d<br>
+    common ports: 80, 443
+  `;
+  tooltip.style.display = 'block';
+  const tw = tooltip.offsetWidth;
+  const th = tooltip.offsetHeight;
+  let left = clientX - wrapRect.left + 14;
+  let top = clientY - wrapRect.top + 14;
+  if (left + tw > wrapRect.width - 4) left = clientX - wrapRect.left - tw - 14;
+  if (left < 4) left = 4;
+  if (top + th > wrapRect.height - 4) top = clientY - wrapRect.top - th - 14;
+  if (top < 4) top = 4;
+  tooltip.style.left = left + 'px';
+  tooltip.style.top = top + 'px';
+}
+function hideTooltip() {
+  document.getElementById('tooltip').style.display = 'none';
+}
+function setupGraphInteraction(svg) {
+  activePointers.clear();
+  interactionMode = null;
+  dragNode = null;
+  panStart = null;
+  pinchStart = null;
+
+  svg.addEventListener('pointerdown', (e) => {
+    svg.setPointerCapture(e.pointerId);
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    didDrag = false;
+    if (activePointers.size === 1) {
+      const node = findNodeAt(svg, graphData, e.clientX, e.clientY);
+      if (node && !node.root) {
+        interactionMode = 'node';
+        dragNode = node;
+      } else {
+        interactionMode = 'pan';
+        panStart = { x: e.clientX, y: e.clientY, camX: camera.x, camY: camera.y };
+        svg.classList.add('panning');
+      }
+    } else if (activePointers.size === 2) {
+      interactionMode = 'pinch';
+      dragNode = null;
+      svg.classList.remove('panning');
+      const pts = Array.from(activePointers.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const rect = svg.getBoundingClientRect();
+      const midX = (pts[0].x + pts[1].x) / 2 - rect.left;
+      const midY = (pts[0].y + pts[1].y) / 2 - rect.top;
+      pinchStart = { dist, scale: camera.scale, midX, midY, camX: camera.x, camY: camera.y };
+    }
+  });
+
+  svg.addEventListener('pointermove', (e) => {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (interactionMode === 'node' && dragNode) {
+      didDrag = true;
+      const world = screenToWorld(svg, e.clientX, e.clientY);
+      dragNode.x = world.x;
+      dragNode.y = world.y;
+      draw(graphData);
+      showTooltip(e.clientX, e.clientY, dragNode);
+    } else if (interactionMode === 'pan' && panStart) {
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag = true;
+      camera.x = panStart.camX + dx;
+      camera.y = panStart.camY + dy;
+      draw(graphData);
+    } else if (interactionMode === 'pinch' && pinchStart && activePointers.size === 2) {
+      didDrag = true;
+      const pts = Array.from(activePointers.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const factor = dist / (pinchStart.dist || 1);
+      const newScale = Math.max(0.25, Math.min(4, pinchStart.scale * factor));
+      camera.x = pinchStart.midX - (pinchStart.midX - pinchStart.camX) * (newScale / pinchStart.scale);
+      camera.y = pinchStart.midY - (pinchStart.midY - pinchStart.camY) * (newScale / pinchStart.scale);
+      camera.scale = newScale;
+      draw(graphData);
+    } else if (!interactionMode && graphData) {
+      const node = findNodeAt(svg, graphData, e.clientX, e.clientY);
+      if (node) showTooltip(e.clientX, e.clientY, node);
+      else hideTooltip();
+    }
+  });
+
+  function endPointer(e) {
+    activePointers.delete(e.pointerId);
+    try { svg.releasePointerCapture(e.pointerId); } catch (err) {}
+    if (activePointers.size === 0) {
+      interactionMode = null;
+      dragNode = null;
+      panStart = null;
+      pinchStart = null;
+      svg.classList.remove('panning');
+      if (e.pointerType === 'touch') hideTooltip();
+    } else if (activePointers.size === 1) {
+      const [remaining] = activePointers.values();
+      interactionMode = 'pan';
+      dragNode = null;
+      panStart = { x: remaining.x, y: remaining.y, camX: camera.x, camY: camera.y };
+    }
+  }
+  svg.addEventListener('pointerup', endPointer);
+  svg.addEventListener('pointercancel', endPointer);
+  svg.addEventListener('pointerleave', (e) => {
+    if (e.pointerType === 'mouse' && activePointers.size === 0) hideTooltip();
+  });
+
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const sensitivity = e.ctrlKey ? 0.01 : 0.0018;
+    const factor = Math.exp(-e.deltaY * sensitivity);
+    zoomAtScreenPoint(factor, sx, sy);
+  }, { passive: false });
+
+  svg.addEventListener('click', (e) => {
+    if (didDrag) { didDrag = false; return; }
+    const node = findNodeAt(svg, graphData, e.clientX, e.clientY);
+    if (node) showTooltip(e.clientX, e.clientY, node);
+    else hideTooltip();
+  });
+}
+
+function escXml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s) {
+  return String(s).replace(/"/g,'&quot;');
+}
+window.addEventListener('resize', () => {
+  if (currentView === 'graph' && graphData) renderGraph(graphData, true);
+});
+</script>
+</body>
+</html>
