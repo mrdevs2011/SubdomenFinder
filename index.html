@@ -130,20 +130,6 @@
     gap: 8px;
     flex-wrap: wrap;
   }
-  .subpath-btn {
-    padding: 2px 8px;
-    font-size: 10px;
-    border-color: #4da6ff;
-    color: #4da6ff;
-  }
-  .subpath-btn:hover {
-    background: #4da6ff;
-    color: #000;
-  }
-  .subpath-btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
   .subpath-status {
     font-size: 10px;
     color: #888;
@@ -544,7 +530,6 @@ async function search() {
           <div class="sub-row">
             <span class="status-dot dot-pending"></span>
             <a href="https://${s}" target="_blank">${s}</a>
-            <button class="subpath-btn" onclick="findSubpaths('${escAttr(s)}', this)">Subpaths</button>
           </div>
           <div class="subpath-status"></div>
           <ul class="subpath-list"></ul>
@@ -576,6 +561,7 @@ async function search() {
     viewToggle.style.display = 'flex';
 
     sorted.forEach(s => checkAlive(s));
+    autoFindAllSubpaths(sorted); // fon rejimida, ketma-ket, saytni bloklamaydi
   } catch (err) {
     stopLoading(`> connection failed — ${err.message || 'target unreachable'}`);
   }
@@ -688,40 +674,34 @@ async function getSubpaths(domain) {
   return { paths: [], source: 'none' };
 }
 
-async function findSubpaths(sub, btn) {
-  const li = btn.closest('li');
-  const statusEl = li.querySelector('.subpath-status');
-  const listEl = li.querySelector('.subpath-list');
+// Barcha subdomain'lar uchun ketma-ket (bittadan), fon rejimida subpath qidirish.
+// Sayt bloklanmaydi, chunki bu funksiya await bilan navbat bo'yicha ishlaydi.
+async function autoFindAllSubpaths(subs) {
+  for (const sub of subs) {
+    const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
+    const li = document.getElementById(id);
+    if (!li) continue; // masalan dead bo'lib boshqa joyga ko'chgan bo'lishi mumkin
+    const statusEl = li.querySelector('.subpath-status');
+    const listEl = li.querySelector('.subpath-list');
+    if (!statusEl || !listEl || listEl.dataset.loaded === '1') continue;
 
-  // Agar ochilgan bo'lsa — shunchaki toggle qilamiz, qayta so'rov yubormaymiz
-  if (listEl.dataset.loaded === '1') {
-    listEl.classList.toggle('open');
-    return;
-  }
-
-  btn.disabled = true;
-  statusEl.textContent = '> searching subpaths...';
-
-  try {
-    const { paths, source } = await getSubpaths(sub);
-    if (paths.length === 0) {
-      statusEl.textContent = '> no subpaths found';
-      btn.disabled = false;
-      return;
+    statusEl.textContent = '> searching subpaths...';
+    try {
+      const { paths, source } = await getSubpaths(sub);
+      if (paths.length === 0) {
+        statusEl.textContent = '> no subpaths found';
+        continue;
+      }
+      const shown = paths.slice(0, 300); // juda uzun ro'yxatni cheklaymiz
+      listEl.innerHTML = shown.map(u =>
+        `<li><a href="${escAttr(u)}" target="_blank">${escXml(u)}</a></li>`
+      ).join('');
+      listEl.dataset.loaded = '1';
+      listEl.classList.add('open');
+      statusEl.innerHTML = `> ${paths.length} found<span class="subpath-source">source: ${escXml(source)}${paths.length > shown.length ? ` (first ${shown.length} shown)` : ''}</span>`;
+    } catch (err) {
+      statusEl.textContent = `> failed — ${err.message || 'unreachable'}`;
     }
-    const shown = paths.slice(0, 300); // juda uzun ro'yxatni cheklaymiz
-    listEl.innerHTML = shown.map(u =>
-      `<li><a href="${escAttr(u)}" target="_blank">${escXml(u)}</a></li>`
-    ).join('');
-    listEl.dataset.loaded = '1';
-    listEl.classList.add('open');
-    statusEl.innerHTML = `> ${paths.length} found<span class="subpath-source">source: ${escXml(source)}${paths.length > shown.length ? ` (first ${shown.length} shown)` : ''}</span>`;
-    btn.textContent = 'Hide';
-    btn.onclick = () => { listEl.classList.toggle('open'); btn.textContent = listEl.classList.contains('open') ? 'Hide' : 'Subpaths'; };
-  } catch (err) {
-    statusEl.textContent = `> failed — ${err.message || 'unreachable'}`;
-  } finally {
-    btn.disabled = false;
   }
 }
 
