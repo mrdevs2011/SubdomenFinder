@@ -129,10 +129,26 @@
     justify-content: center;
     gap: 8px;
     flex-wrap: wrap;
+    position: relative;
   }
+  .see-subpaths {
+    font-size: 10px;
+    color: #4da6ff;
+    opacity: 0;
+    transition: opacity 0.12s;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  li:hover .see-subpaths { opacity: 1; }
+  .see-subpaths:hover { text-decoration: underline; }
   .subpath-status {
     font-size: 10px;
     color: #888;
+    margin-top: 2px;
+  }
+  .geo-status {
+    font-size: 10px;
+    color: #4da6ff;
     margin-top: 2px;
   }
   .subpath-list {
@@ -530,8 +546,10 @@ async function search() {
           <div class="sub-row">
             <span class="status-dot dot-pending"></span>
             <a href="https://${s}" target="_blank">${s}</a>
+            <span class="see-subpaths" onclick="toggleSubpaths(this)">See subpaths</span>
           </div>
           <div class="subpath-status"></div>
+          <div class="geo-status"></div>
           <ul class="subpath-list"></ul>
         </li>`;
       });
@@ -562,6 +580,7 @@ async function search() {
 
     sorted.forEach(s => checkAlive(s));
     autoFindAllSubpaths(sorted); // fon rejimida, ketma-ket, saytni bloklamaydi
+    autoFindAllGeo(sorted);      // shu bilan parallel, mustaqil ravishda
   } catch (err) {
     stopLoading(`> connection failed — ${err.message || 'target unreachable'}`);
   }
@@ -746,10 +765,78 @@ async function autoFindAllSubpaths(subs) {
         `<li><a href="${escAttr(u)}" target="_blank">${escXml(u)}</a></li>`
       ).join('');
       listEl.dataset.loaded = '1';
-      listEl.classList.add('open');
       statusEl.innerHTML = `> ${paths.length} found<span class="subpath-source">source: ${escXml(source)}${paths.length > shown.length ? ` (first ${shown.length} shown)` : ''}</span>`;
     } catch (err) {
       statusEl.textContent = `> failed — ${err.message || 'unreachable'}`;
+    }
+  }
+}
+
+function toggleSubpaths(el) {
+  const li = el.closest('li');
+  const listEl = li.querySelector('.subpath-list');
+  listEl.classList.toggle('open');
+  el.textContent = listEl.classList.contains('open') ? 'Hide subpaths' : 'See subpaths';
+}
+
+// ================= IP va geolokatsiya =================
+
+// Cloudflar'ning DNS-over-HTTPS xizmati orqali subdomain qaysi IP'ga
+// ishora qilishini bilib olamiz. Bu CORS'ga ochiq, proxy kerak emas.
+async function resolveIP(hostname) {
+  const res = await fetch(
+    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=A`,
+    { headers: { accept: 'application/dns-json' } }
+  );
+  if (!res.ok) throw new Error(`DNS HTTP ${res.status}`);
+  const data = await res.json();
+  const answer = (data.Answer || []).find(a => a.type === 1); // type 1 = A record
+  if (!answer) throw new Error('IP topilmadi');
+  return answer.data;
+}
+
+// IP manzil qaysi mamlakat/kompaniyaga tegishli ekanini bilib olamiz.
+// ipapi.co ham CORS'ga ochiq, bepul (kuniga cheklangan so'rov bilan).
+async function geoLookup(ip) {
+  const res = await fetch(`https://ipapi.co/${ip}/json/`);
+  if (!res.ok) throw new Error(`Geo HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.reason || 'geo xato');
+  return data; // { country_name, country_code, org, city, ... }
+}
+
+function countryFlagEmoji(code) {
+  if (!code || code.length !== 2) return '';
+  return String.fromCodePoint(...[...code.toUpperCase()].map(c => 127397 + c.charCodeAt(0)));
+}
+
+// Barcha subdomain'lar uchun ketma-ket IP + geolokatsiya topish.
+// Subpath qidiruvi bilan bir vaqtda (parallel) ishlaydi, chunki ular
+// bir-biriga bog'liq emas va ikkita mustaqil manbadan foydalanadi.
+async function autoFindAllGeo(subs) {
+  for (const sub of subs) {
+    const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
+    const li = document.getElementById(id);
+    if (!li) continue;
+    const geoEl = li.querySelector('.geo-status');
+    if (!geoEl || geoEl.dataset.loaded === '1') continue;
+
+    try {
+      const ip = await resolveIP(sub);
+      let text = `IP: ${ip}`;
+      try {
+        const geo = await geoLookup(ip);
+        const flag = countryFlagEmoji(geo.country_code);
+        text += ` • ${flag} ${geo.country_name || ''}`.trimEnd();
+        if (geo.org) text += ` • ${geo.org}`;
+      } catch (e) {
+        // geolokatsiya ishlamasa, hech bo'lmasa IP'ni ko'rsatamiz
+      }
+      geoEl.textContent = text;
+      geoEl.dataset.loaded = '1';
+    } catch (e) {
+      geoEl.textContent = ''; // IP topilmasa jim qoldiramiz, statusni chalkashtirmaslik uchun
+      geoEl.dataset.loaded = '1';
     }
   }
 }
