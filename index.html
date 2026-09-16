@@ -121,6 +121,57 @@
   .dot-pending { background: #666; }
   .dot-alive { background: #0f0; }
   .dot-dead { background: #f00; }
+
+  /* Subpath UI */
+  .sub-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .subpath-btn {
+    padding: 2px 8px;
+    font-size: 10px;
+    border-color: #4da6ff;
+    color: #4da6ff;
+  }
+  .subpath-btn:hover {
+    background: #4da6ff;
+    color: #000;
+  }
+  .subpath-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .subpath-status {
+    font-size: 10px;
+    color: #888;
+    margin-top: 2px;
+  }
+  .subpath-list {
+    list-style: none;
+    margin: 6px auto 4px;
+    padding: 0;
+    max-width: 90%;
+    text-align: left;
+    display: none;
+  }
+  .subpath-list.open { display: block; }
+  .subpath-list li {
+    border-bottom: 1px dotted #222;
+    text-align: left;
+    padding: 2px 0 2px 16px;
+    font-size: 11px;
+  }
+  .subpath-list li a { color: #4da6ff; }
+  .subpath-source {
+    display: inline-block;
+    font-size: 9px;
+    color: #666;
+    margin-left: 6px;
+  }
+
   /* Graph view */
   #graphWrap {
     display: none;
@@ -211,6 +262,7 @@
     .legend-box { max-width: 130px; font-size: 9px; }
     .zoom-controls { flex-direction: row; bottom: 8px; right: 50%; transform: translateX(50%); }
     .zoom-controls button { width: 42px; height: 42px; }
+    .subpath-btn { width: auto; }
   }
 </style>
 </head>
@@ -488,7 +540,15 @@ async function search() {
       let html = `<div class="section-title" id="${sectionId}">${title} (${list.length})</div><ul>`;
       list.forEach(s => {
         const id = 'sub-' + s.replace(/[^a-z0-9]/g, '');
-        html += `<li id="${id}" data-sub="${s}"><span class="status-dot dot-pending"></span><a href="https://${s}" target="_blank">${s}</a></li>`;
+        html += `<li id="${id}" data-sub="${s}">
+          <div class="sub-row">
+            <span class="status-dot dot-pending"></span>
+            <a href="https://${s}" target="_blank">${s}</a>
+            <button class="subpath-btn" onclick="findSubpaths('${escAttr(s)}', this)">Subpaths</button>
+          </div>
+          <div class="subpath-status"></div>
+          <ul class="subpath-list"></ul>
+        </li>`;
       });
       html += "</ul>";
       return html;
@@ -518,6 +578,150 @@ async function search() {
     sorted.forEach(s => checkAlive(s));
   } catch (err) {
     stopLoading(`> connection failed — ${err.message || 'target unreachable'}`);
+  }
+}
+
+// ================= Subpath Finder (sitemap.xml -> robots.txt -> homepage crawl) =================
+
+// CORS proxy orqali fetch qilish
+async function fetchWithProxy(targetUrl) {
+  const proxies = [
+    targetUrl, // avval to'g'ridan-to'g'ri urinib ko'ramiz (CORS bo'lsa ishlaydi)
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`
+  ];
+  let lastErr = null;
+  for (const p of proxies) {
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(p, { signal: controller.signal });
+      clearTimeout(t);
+      if (res.ok) return res;
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('Barcha proxylar ishlamadi');
+}
+
+// sitemap.xml (yoki sitemap index) ni o'qib, ichidagi <loc> tag'larni chiqarib beradi
+async function tryFetchSitemap(url, depth = 0) {
+  if (depth > 3) return []; // cheksiz rekursiyadan himoya
+  const res = await fetchWithProxy(url);
+  const text = await res.text();
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(text, 'application/xml');
+
+  const parserError = xml.querySelector('parsererror');
+  if (parserError) throw new Error('sitemap XML emas yoki buzilgan');
+
+  // Agar bu sitemap index bo'lsa (ichida boshqa sitemap'larga link bo'lsa)
+  const sitemapNodes = xml.querySelectorAll('sitemap > loc');
+  if (sitemapNodes.length > 0) {
+    let all = [];
+    const childSitemaps = Array.from(sitemapNodes).slice(0, 15); // juda ko'p bo'lsa cheklaymiz
+    for (const node of childSitemaps) {
+      try {
+        const childUrls = await tryFetchSitemap(node.textContent.trim(), depth + 1);
+        all = all.concat(childUrls);
+      } catch (e) { /* bitta ichki sitemap ishlamasa, davom etamiz */ }
+    }
+    return all;
+  }
+
+  // Oddiy sitemap — sahifalar ro'yxati
+  const locNodes = xml.querySelectorAll('url > loc');
+  return Array.from(locNodes).map(n => n.textContent.trim());
+}
+
+// Fallback: bosh sahifani ochib, ichidagi <a href> larni yig'ib olish
+async function crawlHomepageLinks(base) {
+  const res = await fetchWithProxy(base);
+  const html = await res.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const links = Array.from(doc.querySelectorAll('a[href]'))
+    .map(a => a.getAttribute('href'))
+    .filter(href => href && !href.startsWith('#') && !href.startsWith('mailto:') && !href.startsWith('javascript:'))
+    .map(href => {
+      try { return new URL(href, base).href; } catch { return null; }
+    })
+    .filter(Boolean)
+    .filter(u => u.startsWith(base)); // faqat shu domen ichidagi link'lar
+  return [...new Set(links)];
+}
+
+async function getSubpaths(domain) {
+  const base = `https://${domain}`;
+
+  // 1-urinish: to'g'ridan-to'g'ri sitemap.xml
+  try {
+    const urls = await tryFetchSitemap(`${base}/sitemap.xml`);
+    if (urls.length > 0) return { paths: [...new Set(urls)], source: 'sitemap.xml' };
+  } catch (e) {
+    console.warn('sitemap.xml topilmadi:', e.message);
+  }
+
+  // 2-urinish: robots.txt ichidan sitemap manzilini topish
+  try {
+    const res = await fetchWithProxy(`${base}/robots.txt`);
+    const text = await res.text();
+    const matches = [...text.matchAll(/Sitemap:\s*(\S+)/gi)];
+    for (const m of matches) {
+      const sitemapUrl = m[1].trim();
+      try {
+        const urls = await tryFetchSitemap(sitemapUrl);
+        if (urls.length > 0) return { paths: [...new Set(urls)], source: 'robots.txt → sitemap' };
+      } catch (e) { /* keyingi sitemap manzilini sinaymiz */ }
+    }
+  } catch (e) {
+    console.warn('robots.txt topilmadi:', e.message);
+  }
+
+  // 3-urinish: bosh sahifadan link'larni crawl qilish (oxirgi fallback)
+  const urls = await crawlHomepageLinks(base);
+  if (urls.length > 0) return { paths: [...new Set(urls)], source: 'homepage crawl (fallback)' };
+
+  return { paths: [], source: 'none' };
+}
+
+async function findSubpaths(sub, btn) {
+  const li = btn.closest('li');
+  const statusEl = li.querySelector('.subpath-status');
+  const listEl = li.querySelector('.subpath-list');
+
+  // Agar ochilgan bo'lsa — shunchaki toggle qilamiz, qayta so'rov yubormaymiz
+  if (listEl.dataset.loaded === '1') {
+    listEl.classList.toggle('open');
+    return;
+  }
+
+  btn.disabled = true;
+  statusEl.textContent = '> searching subpaths...';
+
+  try {
+    const { paths, source } = await getSubpaths(sub);
+    if (paths.length === 0) {
+      statusEl.textContent = '> no subpaths found';
+      btn.disabled = false;
+      return;
+    }
+    const shown = paths.slice(0, 300); // juda uzun ro'yxatni cheklaymiz
+    listEl.innerHTML = shown.map(u =>
+      `<li><a href="${escAttr(u)}" target="_blank">${escXml(u)}</a></li>`
+    ).join('');
+    listEl.dataset.loaded = '1';
+    listEl.classList.add('open');
+    statusEl.innerHTML = `> ${paths.length} found<span class="subpath-source">source: ${escXml(source)}${paths.length > shown.length ? ` (first ${shown.length} shown)` : ''}</span>`;
+    btn.textContent = 'Hide';
+    btn.onclick = () => { listEl.classList.toggle('open'); btn.textContent = listEl.classList.contains('open') ? 'Hide' : 'Subpaths'; };
+  } catch (err) {
+    statusEl.textContent = `> failed — ${err.message || 'unreachable'}`;
+  } finally {
+    btn.disabled = false;
   }
 }
 
