@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<title>SubdomenFinder</title>
+<title>Subdomen & SubFolder Finder</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -141,6 +141,7 @@
   }
   li:hover .see-subpaths { opacity: 1; }
   .see-subpaths:hover { text-decoration: underline; }
+  body.show-all-subpaths .see-subpaths { display: none !important; }
   .subpath-status {
     font-size: 10px;
     color: #888;
@@ -300,7 +301,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h2>Subdomain Finder</h2>
+  <h2>Subdomen & SubFolder Finder</h2>
   <div class="search-row">
     <input type="text" id="domain" placeholder="example.com" onkeydown="if(event.key==='Enter') search()">
     <button onclick="search()">Search</button>
@@ -315,7 +316,7 @@
     <svg id="graphSvg"></svg>
     <div class="legend-box">
       <div class="legend-title">LEGEND</div>
-      <div class="legend-row"><span class="legend-dot" style="background:#eee"></span> Root domain</div>
+      <div class="legend-row"><span class="legend-dot" style="background:#eee"></span> Root domen</div>
       <div class="legend-row"><span class="legend-dot" style="background:#4da6ff"></span> API</div>
       <div class="legend-row"><span class="legend-dot" style="background:#0f0"></span> User</div>
       <div class="legend-row"><span class="legend-dot" style="background:#444"></span> Dead</div>
@@ -357,6 +358,7 @@ function popupChoice(yes) {
   popupResolved = true;
   showAllSubpaths = yes;
   document.getElementById('popupOverlay').classList.remove('open');
+  document.body.classList.toggle('show-all-subpaths', yes);
   if (yes) {
     // Orqa fonda tayyor bo'lgan yoki hali kelayotgan natijalarni darhol chiqaramiz
     subpathCache.forEach((entry, sub) => {
@@ -488,7 +490,7 @@ async function search() {
   const viewToggle = document.getElementById('viewToggle');
 
   if (!domain || !domain.includes('.')) {
-    status.textContent = "Enter a valid domain";
+    status.textContent = "Enter a valid domen";
     return;
   }
 
@@ -497,6 +499,7 @@ async function search() {
   document.getElementById('graphWrap').style.display = 'none';
   document.getElementById('graphHint').style.display = 'none';
   document.getElementById('popupOverlay').classList.remove('open');
+  document.body.classList.remove('show-all-subpaths');
   showAllSubpaths = false;
   popupResolved = false;
   subpathCache.clear();
@@ -799,42 +802,70 @@ async function getSubpaths(domain) {
   return { paths: [], source: 'none' };
 }
 
-// Barcha subdomain'lar uchun ketma-ket (bittadan), fon rejimida subpath qidirish.
+// Barcha subdomen'lar uchun parallel (bir nechtasi bir vaqtda) fon rejimida subpath qidirish.
 // Natijalar har doim subpathCache'ga saqlanadi (orqa fonda yuklab qo'yiladi).
 // Popup hali "Yes/No" deb javob berilmagan bo'lsa — birinchi natija tayyor bo'lganda popup chiqadi.
-// "Yes" bosilgan bo'lsa — natija darhol DOM'ga chiqadi. "No" bosilgan bo'lsa (yoki hali so'ralmagan) —
-// natija faqat cache'da turadi, "See subpath" bosilganda darhol (qayta so'ramasdan) ko'rsatiladi.
+// "Yes" bosilgan bo'lsa — har bir natija tayyor bo'lishi bilan darhol DOM'ga chiqadi.
+// "No" bosilgan bo'lsa (yoki hali so'ralmagan) — natija faqat cache'da turadi,
+// "See subpath" bosilganda darhol (qayta so'ramasdan) ko'rsatiladi.
+const SUBPATH_CONCURRENCY = 5; // bir vaqtning o'zida nechta subdomen tekshirilishi
+
+async function fetchSubpathsFor(sub, onFirstResult) {
+  const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
+  const li = document.getElementById(id);
+  const statusEl = li ? li.querySelector('.subpath-status') : null;
+
+  try {
+    const { paths, source } = await getSubpaths(sub);
+    subpathCache.set(sub, { loading: false, paths, source });
+    onFirstResult();
+    if (showAllSubpaths) {
+      renderSubpathsFor(sub, paths, source);
+    } else if (statusEl) {
+      statusEl.textContent = '';
+    }
+  } catch (err) {
+    subpathCache.set(sub, { loading: false, paths: [], source: 'none', error: err.message });
+    onFirstResult();
+    if (statusEl && showAllSubpaths) {
+      statusEl.textContent = `> failed — ${err.message || 'unreachable'}`;
+    }
+  }
+}
+
 async function autoFindAllSubpaths(subs) {
   let popupShown = false;
-  for (const sub of subs) {
-    if (!subpathCache.has(sub)) subpathCache.set(sub, { loading: true });
+  const onFirstResult = () => {
+    if (!popupShown) {
+      popupShown = true;
+      showSubpathsPopup();
+    }
+  };
 
+  // Hammasini "navbatda" deb belgilaymiz — shu bilan foydalanuvchi hech narsa
+  // ko'rinmay qolgan/buzilgan deb o'ylamaydi, hali tekshirilmoqda ekanini biladi.
+  subs.forEach(sub => {
+    if (!subpathCache.has(sub)) subpathCache.set(sub, { loading: true });
     const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
     const li = document.getElementById(id);
     const statusEl = li ? li.querySelector('.subpath-status') : null;
-    if (statusEl) statusEl.textContent = '> searching subpaths...';
+    if (statusEl) statusEl.textContent = '> queued...';
+  });
 
-    try {
-      const { paths, source } = await getSubpaths(sub);
-      subpathCache.set(sub, { loading: false, paths, source });
-
-      if (!popupShown) {
-        popupShown = true;
-        showSubpathsPopup();
-      }
-
-      if (showAllSubpaths) {
-        renderSubpathsFor(sub, paths, source);
-      } else if (statusEl) {
-        statusEl.textContent = paths.length > 0 ? '' : '';
-      }
-    } catch (err) {
-      subpathCache.set(sub, { loading: false, paths: [], source: 'none', error: err.message });
-      if (statusEl && showAllSubpaths) {
-        statusEl.textContent = `> failed — ${err.message || 'unreachable'}`;
-      }
+  // Oddiy concurrency pool: bir vaqtda ko'pi bilan SUBPATH_CONCURRENCY ta so'rov ishlaydi.
+  let index = 0;
+  async function worker() {
+    while (index < subs.length) {
+      const sub = subs[index++];
+      const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
+      const li = document.getElementById(id);
+      const statusEl = li ? li.querySelector('.subpath-status') : null;
+      if (statusEl) statusEl.textContent = '> searching subpaths...';
+      await fetchSubpathsFor(sub, onFirstResult);
     }
   }
+  const workers = Array.from({ length: Math.min(SUBPATH_CONCURRENCY, subs.length) }, () => worker());
+  await Promise.all(workers);
 }
 
 // Cache'dagi (yoki hozirgina topilgan) natijani berilgan subdomen qatorida ko'rsatadi.
@@ -860,7 +891,7 @@ function renderSubpathsFor(sub, paths, source) {
     statusEl.innerHTML = `> ${paths.length} found<span class="subpath-source">source: ${escXml(source)}${paths.length > shown.length ? ` (first ${shown.length} shown)` : ''}</span>`;
   }
   const btn = li.querySelector('.see-subpaths');
-  if (btn) btn.textContent = 'Hide subpath';
+  if (btn && !showAllSubpaths) btn.textContent = 'Hide subpath';
 }
 
 // "See subpath" bosilganda: agar natija cache'da tayyor bo'lsa darhol ko'rsatadi;
@@ -913,13 +944,61 @@ async function resolveIP(hostname) {
 }
 
 // IP manzil qaysi mamlakat/kompaniyaga tegishli ekanini bilib olamiz.
-// ipapi.co ham CORS'ga ochiq, bepul (kuniga cheklangan so'rov bilan).
+// ipapi.co bepul tarifda tez-tez rate-limit (429) beradi, shuning uchun
+// bir nechta mustaqil manba ketma-ket sinaladi — biri ishlamasa keyingisiga o'tiladi.
+const GEO_PROVIDERS = [
+  {
+    url: ip => `https://ipapi.co/${ip}/json/`,
+    parse: data => {
+      if (data.error) throw new Error(data.reason || 'geo xato');
+      return {
+        country_name: data.country_name,
+        country_code: data.country_code,
+        org: data.org
+      };
+    }
+  },
+  {
+    url: ip => `https://ipwho.is/${ip}`,
+    parse: data => {
+      if (data.success === false) throw new Error(data.message || 'geo xato');
+      return {
+        country_name: data.country,
+        country_code: data.country_code,
+        org: (data.connection && (data.connection.isp || data.connection.org)) || ''
+      };
+    }
+  },
+  {
+    url: ip => `http://ip-api.com/json/${ip}`,
+    parse: data => {
+      if (data.status === 'fail') throw new Error(data.message || 'geo xato');
+      return {
+        country_name: data.country,
+        country_code: data.countryCode,
+        org: data.isp || data.org || ''
+      };
+    }
+  }
+];
+
 async function geoLookup(ip) {
-  const res = await fetch(`https://ipapi.co/${ip}/json/`);
-  if (!res.ok) throw new Error(`Geo HTTP ${res.status}`);
-  const data = await res.json();
-  if (data.error) throw new Error(data.reason || 'geo xato');
-  return data; // { country_name, country_code, org, city, ... }
+  let lastErr = null;
+  for (const provider of GEO_PROVIDERS) {
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(provider.url(ip), { signal: controller.signal });
+      clearTimeout(t);
+      if (!res.ok) throw new Error(`Geo HTTP ${res.status}`);
+      const data = await res.json();
+      return provider.parse(data); // { country_name, country_code, org }
+    } catch (e) {
+      lastErr = e;
+      continue; // keyingi manbaga o'tamiz
+    }
+  }
+  throw lastErr || new Error('Barcha geo manbalar ishlamadi');
 }
 
 function countryFlagEmoji(code) {
@@ -927,9 +1006,14 @@ function countryFlagEmoji(code) {
   return String.fromCodePoint(...[...code.toUpperCase()].map(c => 127397 + c.charCodeAt(0)));
 }
 
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
 // Barcha subdomain'lar uchun ketma-ket IP + geolokatsiya topish.
 // Subpath qidiruvi bilan bir vaqtda (parallel) ishlaydi, chunki ular
 // bir-biriga bog'liq emas va ikkita mustaqil manbadan foydalanadi.
+// So'rovlar orasiga kichik pauza qo'yiladi — bu rate-limit (429) xatolarini kamaytiradi.
 async function autoFindAllGeo(subs) {
   for (const sub of subs) {
     const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
@@ -941,13 +1025,19 @@ async function autoFindAllGeo(subs) {
     try {
       const ip = await resolveIP(sub);
       let text = `IP: ${ip}`;
-      try {
-        const geo = await geoLookup(ip);
-        const flag = countryFlagEmoji(geo.country_code);
-        text += ` • ${flag} ${geo.country_name || ''}`.trimEnd();
-        if (geo.org) text += ` • ${geo.org}`;
-      } catch (e) {
-        // geolokatsiya ishlamasa, hech bo'lmasa IP'ni ko'rsatamiz
+      let geoOk = false;
+      // Bir marta xato bo'lsa, qisqa pauzadan so'ng yana bir bor sinaymiz
+      for (let attempt = 0; attempt < 2 && !geoOk; attempt++) {
+        try {
+          if (attempt > 0) await sleep(600);
+          const geo = await geoLookup(ip);
+          const flag = countryFlagEmoji(geo.country_code);
+          text += ` • ${flag} ${geo.country_name || ''}`.trimEnd();
+          if (geo.org) text += ` • ${geo.org}`;
+          geoOk = true;
+        } catch (e) {
+          // keyingi urinishga o'tamiz, oxirgisida ham ishlamasa faqat IP qoladi
+        }
       }
       geoEl.textContent = text;
       geoEl.dataset.loaded = '1';
@@ -955,6 +1045,7 @@ async function autoFindAllGeo(subs) {
       geoEl.textContent = ''; // IP topilmasa jim qoldiramiz, statusni chalkashtirmaslik uchun
       geoEl.dataset.loaded = '1';
     }
+    await sleep(250); // so'rovlar orasida kichik pauza — rate-limit'ni kamaytiradi
   }
 }
 
