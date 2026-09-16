@@ -266,6 +266,36 @@
     .zoom-controls button { width: 42px; height: 42px; }
     .subpath-btn { width: auto; }
   }
+
+  /* Popup modal */
+  #popupOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 50;
+    align-items: center;
+    justify-content: center;
+  }
+  #popupOverlay.open { display: flex; }
+  #popupBox {
+    background: #000;
+    border: 1px solid #0f0;
+    padding: 20px;
+    max-width: 320px;
+    text-align: center;
+  }
+  #popupBox p {
+    margin: 0 0 16px;
+  }
+  #popupBox .popup-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+  }
+  #popupBox button {
+    flex: 1;
+  }
 </style>
 </head>
 <body>
@@ -303,9 +333,37 @@
   </div>
   <div id="graphHint" style="display:none">Drag nodes • Pinch/scroll to zoom • Drag background to pan • Hover/tap for details</div>
 </div>
+<div id="popupOverlay">
+  <div id="popupBox">
+    <p>Barcha subdomenlarning subpath'larini darhol ko'rsatishni xohlaysizmi?</p>
+    <div class="popup-actions">
+      <button onclick="popupChoice(true)">Yes</button>
+      <button onclick="popupChoice(false)">No</button>
+    </div>
+  </div>
+</div>
 <script>
 let currentView = 'list';
 let graphData = null;
+let showAllSubpaths = false; // true = Yes bosilgan, natijalar darhol ko'rsatiladi
+let popupResolved = false;
+const subpathCache = new Map(); // sub -> { paths, source } yoki { loading: true } — orqa fonda tayyor bo'lgan natijalar
+
+function showSubpathsPopup() {
+  if (popupResolved) return;
+  document.getElementById('popupOverlay').classList.add('open');
+}
+function popupChoice(yes) {
+  popupResolved = true;
+  showAllSubpaths = yes;
+  document.getElementById('popupOverlay').classList.remove('open');
+  if (yes) {
+    // Orqa fonda tayyor bo'lgan yoki hali kelayotgan natijalarni darhol chiqaramiz
+    subpathCache.forEach((entry, sub) => {
+      if (!entry.loading) renderSubpathsFor(sub, entry.paths, entry.source);
+    });
+  }
+}
 
 const loadingLines = [
   "> connecting to Certificate Transparency...",
@@ -438,6 +496,10 @@ async function search() {
   viewToggle.style.display = 'none';
   document.getElementById('graphWrap').style.display = 'none';
   document.getElementById('graphHint').style.display = 'none';
+  document.getElementById('popupOverlay').classList.remove('open');
+  showAllSubpaths = false;
+  popupResolved = false;
+  subpathCache.clear();
   setView('list');
   startLoading();
 
@@ -546,7 +608,7 @@ async function search() {
           <div class="sub-row">
             <span class="status-dot dot-pending"></span>
             <a href="https://${s}" target="_blank">${s}</a>
-            <span class="see-subpaths" onclick="toggleSubpaths(this)">See subpaths</span>
+            <span class="see-subpaths" onclick="toggleSubpaths(this)">See subpath</span>
           </div>
           <div class="subpath-status"></div>
           <div class="geo-status"></div>
@@ -579,7 +641,7 @@ async function search() {
     viewToggle.style.display = 'flex';
 
     sorted.forEach(s => checkAlive(s));
-    autoFindAllSubpaths(sorted); // fon rejimida, ketma-ket, saytni bloklamaydi
+    autoFindAllSubpaths(sorted); // fon rejimida, ketma-ket, saytni bloklamaydi, natija darhol ochiq holda chiqadi
     autoFindAllGeo(sorted);      // shu bilan parallel, mustaqil ravishda
   } catch (err) {
     stopLoading(`> connection failed — ${err.message || 'target unreachable'}`);
@@ -613,11 +675,6 @@ async function fetchViaSupabase(targetUrl) {
 }
 
 // CORS proxy orqali matn (text) olib kelish.
-// Bir nechta proxy ketma-ket sinaladi: har birining javob formati boshqacha
-// bo'lgani uchun (ba'zisi xom matn, ba'zisi JSON ichida "contents" maydoni
-// bilan qaytaradi), har biri o'z turiga qarab o'qiladi. Bittasi ishlamasa
-// keyingisiga o'tiladi, shu bilan bitta proxy o'chib qolgan taqdirda ham
-// (bunday holat tez-tez bo'lib turadi) butun funksiya to'xtab qolmaydi.
 const PROXY_CHAIN = [
   { build: t => t, kind: 'raw' }, // avval to'g'ridan-to'g'ri (target CORS ochiq bo'lsa eng tez yo'l)
   { build: t => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(t)}`, kind: 'raw' },
@@ -743,40 +800,100 @@ async function getSubpaths(domain) {
 }
 
 // Barcha subdomain'lar uchun ketma-ket (bittadan), fon rejimida subpath qidirish.
-// Sayt bloklanmaydi, chunki bu funksiya await bilan navbat bo'yicha ishlaydi.
+// Natijalar har doim subpathCache'ga saqlanadi (orqa fonda yuklab qo'yiladi).
+// Popup hali "Yes/No" deb javob berilmagan bo'lsa — birinchi natija tayyor bo'lganda popup chiqadi.
+// "Yes" bosilgan bo'lsa — natija darhol DOM'ga chiqadi. "No" bosilgan bo'lsa (yoki hali so'ralmagan) —
+// natija faqat cache'da turadi, "See subpath" bosilganda darhol (qayta so'ramasdan) ko'rsatiladi.
 async function autoFindAllSubpaths(subs) {
+  let popupShown = false;
   for (const sub of subs) {
+    if (!subpathCache.has(sub)) subpathCache.set(sub, { loading: true });
+
     const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
     const li = document.getElementById(id);
-    if (!li) continue; // masalan dead bo'lib boshqa joyga ko'chgan bo'lishi mumkin
-    const statusEl = li.querySelector('.subpath-status');
-    const listEl = li.querySelector('.subpath-list');
-    if (!statusEl || !listEl || listEl.dataset.loaded === '1') continue;
+    const statusEl = li ? li.querySelector('.subpath-status') : null;
+    if (statusEl) statusEl.textContent = '> searching subpaths...';
 
-    statusEl.textContent = '> searching subpaths...';
     try {
       const { paths, source } = await getSubpaths(sub);
-      if (paths.length === 0) {
-        statusEl.textContent = '> no subpaths found';
-        continue;
+      subpathCache.set(sub, { loading: false, paths, source });
+
+      if (!popupShown) {
+        popupShown = true;
+        showSubpathsPopup();
       }
-      const shown = paths.slice(0, 300); // juda uzun ro'yxatni cheklaymiz
-      listEl.innerHTML = shown.map(u =>
-        `<li><a href="${escAttr(u)}" target="_blank">${escXml(u)}</a></li>`
-      ).join('');
-      listEl.dataset.loaded = '1';
-      statusEl.innerHTML = `> ${paths.length} found<span class="subpath-source">source: ${escXml(source)}${paths.length > shown.length ? ` (first ${shown.length} shown)` : ''}</span>`;
+
+      if (showAllSubpaths) {
+        renderSubpathsFor(sub, paths, source);
+      } else if (statusEl) {
+        statusEl.textContent = paths.length > 0 ? '' : '';
+      }
     } catch (err) {
-      statusEl.textContent = `> failed — ${err.message || 'unreachable'}`;
+      subpathCache.set(sub, { loading: false, paths: [], source: 'none', error: err.message });
+      if (statusEl && showAllSubpaths) {
+        statusEl.textContent = `> failed — ${err.message || 'unreachable'}`;
+      }
     }
   }
 }
 
+// Cache'dagi (yoki hozirgina topilgan) natijani berilgan subdomen qatorida ko'rsatadi.
+function renderSubpathsFor(sub, paths, source) {
+  const id = 'sub-' + sub.replace(/[^a-z0-9]/g, '');
+  const li = document.getElementById(id);
+  if (!li) return;
+  const statusEl = li.querySelector('.subpath-status');
+  const listEl = li.querySelector('.subpath-list');
+  if (!listEl) return;
+
+  if (!paths || paths.length === 0) {
+    if (statusEl) statusEl.textContent = '> no subpaths found';
+    return;
+  }
+  const shown = paths.slice(0, 300);
+  listEl.innerHTML = shown.map(u =>
+    `<li><a href="${escAttr(u)}" target="_blank">${escXml(u)}</a></li>`
+  ).join('');
+  listEl.dataset.loaded = '1';
+  listEl.classList.add('open');
+  if (statusEl) {
+    statusEl.innerHTML = `> ${paths.length} found<span class="subpath-source">source: ${escXml(source)}${paths.length > shown.length ? ` (first ${shown.length} shown)` : ''}</span>`;
+  }
+  const btn = li.querySelector('.see-subpaths');
+  if (btn) btn.textContent = 'Hide subpath';
+}
+
+// "See subpath" bosilganda: agar natija cache'da tayyor bo'lsa darhol ko'rsatadi;
+// hali orqa fonda yuklanayotgan bo'lsa, tayyor bo'lgach avtomatik chiqadi.
 function toggleSubpaths(el) {
   const li = el.closest('li');
+  const sub = li.dataset.sub;
   const listEl = li.querySelector('.subpath-list');
-  listEl.classList.toggle('open');
-  el.textContent = listEl.classList.contains('open') ? 'Hide subpaths' : 'See subpaths';
+  const statusEl = li.querySelector('.subpath-status');
+
+  // Allaqachon ochilgan bo'lsa — yashiramiz
+  if (listEl.classList.contains('open')) {
+    listEl.classList.remove('open');
+    el.textContent = 'See subpath';
+    return;
+  }
+
+  const cached = subpathCache.get(sub);
+  if (cached && !cached.loading) {
+    renderSubpathsFor(sub, cached.paths, cached.source);
+  } else {
+    // Hali yuklanmoqda — tayyor bo'lganda o'zi ko'rinadi (showAllSubpaths bo'lmasa ham,
+    // shu subdomen uchun alohida "kutish rejimi"ni yoqamiz)
+    if (statusEl) statusEl.textContent = '> loading...';
+    el.textContent = 'Loading...';
+    const check = setInterval(() => {
+      const c = subpathCache.get(sub);
+      if (c && !c.loading) {
+        clearInterval(check);
+        renderSubpathsFor(sub, c.paths, c.source);
+      }
+    }, 300);
+  }
 }
 
 // ================= IP va geolokatsiya =================
