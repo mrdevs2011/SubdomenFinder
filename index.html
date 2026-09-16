@@ -569,25 +569,77 @@ async function search() {
 
 // ================= Subpath Finder (sitemap.xml -> robots.txt -> homepage crawl) =================
 
-// CORS proxy orqali fetch qilish
-async function fetchWithProxy(targetUrl) {
-  const proxies = [
-    targetUrl, // avval to'g'ridan-to'g'ri urinib ko'ramiz (CORS bo'lsa ishlaydi)
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
-    `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`
-  ];
-  let lastErr = null;
-  for (const p of proxies) {
+// ---- Supabase Edge Function orqali proxy (eng ishonchli variant) ----
+// O'z Supabase loyihangdan olib, shu ikkitasini almashtir:
+//   SUPABASE_URL   -> Settings -> API -> Project URL
+//   SUPABASE_ANON_KEY -> Settings -> API -> anon / public key
+const SUPABASE_URL = "https://SENING-PROJECT-ID.supabase.co";
+const SUPABASE_ANON_KEY = "SENING_ANON_KEY";
+const SUPABASE_PROXY_ENABLED = false; // kalitlarni qo'ygach true qil
+
+async function fetchViaSupabase(targetUrl) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/fetch-proxy`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${SUPABASE_ANON_KEY}`
+    },
+    body: JSON.stringify({ url: targetUrl })
+  });
+  if (!res.ok) throw new Error(`Supabase proxy HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  if (typeof data.body !== 'string' || data.body.length === 0) throw new Error("bo'sh javob");
+  return data.body;
+}
+
+// CORS proxy orqali matn (text) olib kelish.
+// Bir nechta proxy ketma-ket sinaladi: har birining javob formati boshqacha
+// bo'lgani uchun (ba'zisi xom matn, ba'zisi JSON ichida "contents" maydoni
+// bilan qaytaradi), har biri o'z turiga qarab o'qiladi. Bittasi ishlamasa
+// keyingisiga o'tiladi, shu bilan bitta proxy o'chib qolgan taqdirda ham
+// (bunday holat tez-tez bo'lib turadi) butun funksiya to'xtab qolmaydi.
+const PROXY_CHAIN = [
+  { build: t => t, kind: 'raw' }, // avval to'g'ridan-to'g'ri (target CORS ochiq bo'lsa eng tez yo'l)
+  { build: t => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(t)}`, kind: 'raw' },
+  { build: t => `https://api.allorigins.win/get?url=${encodeURIComponent(t)}`, kind: 'json' },
+  { build: t => `https://api.allorigins.win/raw?url=${encodeURIComponent(t)}`, kind: 'raw' },
+  { build: t => `https://corsproxy.io/?url=${encodeURIComponent(t)}`, kind: 'raw' },
+  { build: t => `https://thingproxy.freeboard.io/fetch/${t}`, kind: 'raw' }
+];
+
+async function fetchTextWithProxy(targetUrl) {
+  // Eng ishonchlisi shu — kalitlar qo'yilgan bo'lsa, avval shuni sinaymiz
+  if (SUPABASE_PROXY_ENABLED) {
     try {
+      return await fetchViaSupabase(targetUrl);
+    } catch (e) {
+      console.warn('Supabase proxy ishlamadi, oddiy proxylarga o\'tamiz:', e.message);
+    }
+  }
+
+  let lastErr = null;
+  for (const proxy of PROXY_CHAIN) {
+    try {
+      const url = proxy.build(targetUrl);
       const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(p, { signal: controller.signal });
+      const t = setTimeout(() => controller.abort(), 12000);
+      const res = await fetch(url, { signal: controller.signal });
       clearTimeout(t);
-      if (res.ok) return res;
-      lastErr = new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (proxy.kind === 'json') {
+        const data = await res.json();
+        if (!data || typeof data.contents !== 'string' || data.contents.length === 0) {
+          throw new Error('bo\'sh javob');
+        }
+        return data.contents;
+      }
+      const text = await res.text();
+      if (!text) throw new Error('bo\'sh javob');
+      return text;
     } catch (e) {
       lastErr = e;
+      continue; // keyingi proxyga o'tamiz
     }
   }
   throw lastErr || new Error('Barcha proxylar ishlamadi');
@@ -596,8 +648,7 @@ async function fetchWithProxy(targetUrl) {
 // sitemap.xml (yoki sitemap index) ni o'qib, ichidagi <loc> tag'larni chiqarib beradi
 async function tryFetchSitemap(url, depth = 0) {
   if (depth > 3) return []; // cheksiz rekursiyadan himoya
-  const res = await fetchWithProxy(url);
-  const text = await res.text();
+  const text = await fetchTextWithProxy(url);
   const parser = new DOMParser();
   const xml = parser.parseFromString(text, 'application/xml');
 
@@ -625,8 +676,7 @@ async function tryFetchSitemap(url, depth = 0) {
 
 // Fallback: bosh sahifani ochib, ichidagi <a href> larni yig'ib olish
 async function crawlHomepageLinks(base) {
-  const res = await fetchWithProxy(base);
-  const html = await res.text();
+  const html = await fetchTextWithProxy(base);
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const links = Array.from(doc.querySelectorAll('a[href]'))
@@ -653,8 +703,7 @@ async function getSubpaths(domain) {
 
   // 2-urinish: robots.txt ichidan sitemap manzilini topish
   try {
-    const res = await fetchWithProxy(`${base}/robots.txt`);
-    const text = await res.text();
+    const text = await fetchTextWithProxy(`${base}/robots.txt`);
     const matches = [...text.matchAll(/Sitemap:\s*(\S+)/gi)];
     for (const m of matches) {
       const sitemapUrl = m[1].trim();
