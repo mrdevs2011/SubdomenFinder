@@ -573,12 +573,12 @@ async function search() {
 // O'z Supabase loyihangdan olib, shu ikkitasini almashtir:
 //   SUPABASE_URL   -> Settings -> API -> Project URL
 //   SUPABASE_ANON_KEY -> Settings -> API -> anon / public key
-const SUPABASE_URL = "https://SENING-PROJECT-ID.supabase.co";
-const SUPABASE_ANON_KEY = "SENING_ANON_KEY";
-const SUPABASE_PROXY_ENABLED = false; // kalitlarni qo'ygach true qil
+const SUPABASE_URL = "https://yyqkorlddcjmlilpqkjj.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_6oamOd8rUWxS8D5zklSBsQ_eVw5kyOC";
+const SUPABASE_PROXY_ENABLED = true; // kalitlar qo'yildi
 
 async function fetchViaSupabase(targetUrl) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/fetch-proxy`, {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/super-function`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
